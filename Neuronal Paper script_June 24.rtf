@@ -1,0 +1,113 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2639
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;}
+{\*\expandedcolortbl;;\cssrgb\c0\c0\c0;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx566\tx1133\tx1700\tx2267\tx2834\tx3401\tx3968\tx4535\tx5102\tx5669\tx6236\tx6803\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 library(Seurat)\
+library(dplyr)\
+library(Matrix)\
+library(patchwork)\
+library(tidyverse)\
+\
+\
+# Read data from the TSV file (Assuming the file has headers for genes and cell names)\
+gene_expression_data <- read.delim("wildtype_neurons.gene_expression.counts.tsv", header = TRUE, \
+                                   sep = "\\t", row.names = 1)\
+\
+\
+# Initialize the Seurat object: min cells could be 3-10\
+seurat_obj <- CreateSeuratObject(counts = gene_expression_data, project = "neuronal", \
+                                 min.cells = 10, min.features = 200)\
+\
+\
+# Calculate mitochondrial QC metrics \
+seurat_obj[["percent.mt"]] <- PercentageFeatureSet(seurat_obj, pattern = "^MT-")\
+\
+## Visualize QC metrics as a violin plot\
+png ('plot_MT metrics.png', width=800, height=800)\
+VlnPlot(seurat_obj, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)\
+dev.off()\
+\
+\
+plot1 <- FeatureScatter(seurat_obj, feature1 = "nCount_RNA", feature2 = "percent.mt") + \
+  geom_smooth(method = 'lm')\
+plot2 <- FeatureScatter(seurat_obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") + \
+  geom_smooth(method = 'lm')\
+png ('plot_feature scatter.png', width=1200, height=800)\
+plot1 + plot2\
+dev.off()\
+\
+\
+ # Filter cells based on unique feature counts and % mitochondrial counts\
+seurat_obj <- subset(seurat_obj, subset = nFeature_RNA > 1000 & nFeature_RNA < 10000 &\
+                       nCount_RNA < 50000 & percent.mt < 70)\
+\
+# Preprocess/Normalize the data\
+seurat_obj <- NormalizeData(seurat_obj)\
+seurat_obj <- FindVariableFeatures(seurat_obj)\
+\
+## Identify the 10 most highly variable genes\
+top10 <- head(VariableFeatures(seurat_obj), 10)\
+\
+## plot variable features with and without labels\
+plot1 <- VariableFeaturePlot(seurat_obj)\
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)\
+png ('plot_Variablefeature_plot.png', width=1200, height=800)\
+plot1 + plot2\
+dev.off()\
+\
+# Scale the data: so that mean expression across cells is 0 & variance across cells is 1\
+all.genes <- rownames(seurat_obj)\
+seurat_obj <- ScaleData(seurat_obj, features = all.genes)\
+\
+# Perform dimensionality reduction (e.g., PCA)\
+seurat_obj <- RunPCA(seurat_obj, features = VariableFeatures(object = seurat_obj))\
+\
+# Determine the \'91dimensionality\'92 of the dataset\
+seurat_objJS <- JackStraw(seurat_obj, num.replicate = 100)\
+seurat_objJS <- ScoreJackStraw(seurat_objJS, dims = 1:20)\
+png ('plot_JackStrawPlot.png', width=800, height=800)\
+JackStrawPlot(seurat_objJS, dims = 1:20)\
+dev.off()\
+\
+# Find cell clusters\
+seurat_obj <- FindNeighbors(seurat_obj, dims = 1:10)\
+#---- change "10" as per number of clusters chosen in the previous step\
+seurat_obj <- FindClusters(seurat_obj, resolution = 0.5)\
+#----0.4-1.2 typically returns good results for single-cell datasets of around 3K cells. \
+#----Optimal resolution often increases for larger datasets.\
+\
+# Visualize the results (e.g., t-SNE or UMAP)\
+seurat_objUMAP <- RunUMAP(seurat_obj, dims = 1:10)\
+#---- change "10" as per number of clusters chosen in the previous steps\
+\
+# Plot UMAP\
+png('plot_seurat_obj.png', width=800, height=800)\
+DimPlot(seurat_objUMAP, reduction = "umap", label = TRUE)\
+dev.off()\
+\
+# Save seurat object as RDS file\
+saveRDS(seurat_obj, file = "seurat_obj.rds")\
+\
+#load rds file\
+seurat_obj.clusters <- readRDS("seurat_obj.rds")\
+str(seurat_obj.clusters)\
+View(seurat_obj.clusters@meta.data)\
+\
+# Find all markers:\
+seurat_obj.markers <- FindAllMarkers(seurat_obj, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)\
+seurat_obj.clustermarker <- seurat_obj.markers %>%\
+  group_by(cluster) %>%\
+  slice_max( order_by = avg_log2FC)\
+\
+#Assigning cell type identity to clusters\
+new.cluster.ids <- c(\cf2 \expnd0\expndtw0\kerning0
+"Glial Cells", "Purkinje Neurons", "Excitatory Neurons", "Glial Cells", "Inhibitory Neurons", "Excitatory Neurons", "Inhibitory Neurons", "Excitatory Neurons", "Purkinje Neurons", "Unknown", "Astrocytes")\cf0 \kerning1\expnd0\expndtw0 \
+names(new.cluster.ids) <- levels(seurat_obj.clusters)\
+seurat_obj_Iden <- RenameIdents(seurat_obj.clusters, new.cluster.ids)\
+DimPlot(seurat_obj_Iden, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()\
+\
+\
+}
